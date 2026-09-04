@@ -61,14 +61,14 @@ git clone https://github.com/vodongha/claude-desktop-clone.git
 cd claude-desktop-clone
 
 # Create "Claude (Work)" + "Claude (Personal)" shortcuts on your Desktop.
-# -ReuseDefaultForWork keeps your already-signed-in account for "Work".
-powershell -ExecutionPolicy Bypass -File scripts\Setup.ps1 -ReuseDefaultForWork
+# -ReuseDefaultFor <name> keeps your already-signed-in account for that profile.
+powershell -ExecutionPolicy Bypass -File scripts\Setup.ps1 -Profile Work,Personal -ReuseDefaultFor Personal
 ```
 
 Then:
 
-1. Double-click **Claude (Work)** → your existing account (no re-login).
-2. Double-click **Claude (Personal)** → a fresh window; sign in to the other
+1. Double-click **Claude (Personal)** → your existing account (no re-login).
+2. Double-click **Claude (Work)** → a fresh window; sign in to the other
    account.
 
 Both windows now run at the same time, fully isolated.
@@ -147,8 +147,9 @@ repo afterwards and everything keeps working. Profile *data* lives under
   would go blank after the next update deletes that folder — which is why the
   icon is copied out to a fixed location instead.
 - **Switching the "main" app:** the regular Start-menu Claude icon still uses
-  `%APPDATA%\Claude`, i.e. the same login as a "Work" profile created with
-  `-ReuseDefaultForWork`.
+  `%APPDATA%\Claude`, i.e. the same login as whichever profile was created with
+  `-ReuseDefaultFor` (or the deprecated `-ReuseDefaultForWork` alias, which
+  reuses it for a profile named "Work").
 
 ---
 
@@ -201,8 +202,8 @@ window. Two consequences for multi-profile use:
 1. **Profile data must live under `%APPDATA%`.** The native VM service resolves
    the VM image (`rootfs.vhdx`) at `%APPDATA%\<profile-name>\vm_bundles`,
    *ignoring* `--user-data-dir`. `Setup.ps1` therefore places isolated profiles
-   under `%APPDATA%\<name>` (the `Work`/`-ReuseDefaultForWork` profile already
-   uses `%APPDATA%\Claude`, which is why it works out of the box). A data dir
+   under `%APPDATA%\<name>` (the `-ReuseDefaultFor` profile already uses
+   `%APPDATA%\Claude`, which is why it works out of the box). A data dir
    anywhere else makes Cowork fail with `VHDX file not found`.
 
 2. **Only one Cowork VM can run at a time.** The Hyper-V compute system is *not*
