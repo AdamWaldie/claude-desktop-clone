@@ -12,9 +12,9 @@
       * creates a "Claude (<Name>)" shortcut on your Desktop that opens the app
         with that profile, using the real Claude icon.
 
-    The special profile name "Work" can reuse the account the normally-installed
-    app is already signed into (-ReuseDefaultForWork), so you don't have to log
-    in again for your main account.
+    Whichever profile name you pass to -ReuseDefaultFor can reuse the account the
+    normally-installed app is already signed into, so you don't have to log in
+    again for that account.
 
 .PARAMETER Profile
     One or more profile names. Default: Work, Personal.
@@ -25,9 +25,15 @@
     required for the Cowork VM to start (the native VM service resolves rootfs.vhdx
     under %APPDATA% regardless of --user-data-dir).
 
+.PARAMETER ReuseDefaultFor
+    Name of the profile that should reuse the existing %APPDATA%\Claude login
+    instead of getting a fresh, separate one. Matched case-insensitively against
+    -Profile entries.
+
 .PARAMETER ReuseDefaultForWork
-    Make the "Work" profile reuse the existing %APPDATA%\Claude login instead of
-    a fresh, separate one.
+    Legacy alias for -ReuseDefaultFor Work. Deprecated: prefer -ReuseDefaultFor
+    <name>, which works for any profile name, not just "Work". If -ReuseDefaultFor
+    is also passed explicitly, it takes precedence.
 
 .PARAMETER ConfigDir
     Optional hashtable mapping a profile name to a Claude Code / Cowork config
@@ -39,6 +45,10 @@
     # Creates "Claude (Work)" and "Claude (Personal)" on the Desktop.
 
 .EXAMPLE
+    .\Setup.ps1 -Profile Work,Personal -ReuseDefaultFor Personal
+
+.EXAMPLE
+    # Deprecated alias, still supported:
     .\Setup.ps1 -Profile Personal,Side,Client -ReuseDefaultForWork
 
 .EXAMPLE
@@ -49,12 +59,19 @@
 param(
     [string[]]$Profile = @('Work', 'Personal'),
     [string]$InstallDir = (Join-Path $env:USERPROFILE 'ClaudeProfiles'),
+    [string]$ReuseDefaultFor = $null,
     [switch]$ReuseDefaultForWork,
     [hashtable]$ConfigDir = @{}
 )
 
 $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# Deprecated alias: -ReuseDefaultForWork means -ReuseDefaultFor Work, unless
+# -ReuseDefaultFor was already given explicitly (which wins).
+if ($ReuseDefaultForWork -and -not $ReuseDefaultFor) {
+    $ReuseDefaultFor = 'Work'
+}
 
 # Extracts the highest-resolution icon out of an .exe into a standalone .ico.
 # This is what makes shortcut icons survive app updates: the Claude .exe lives
@@ -162,7 +179,7 @@ $desktop = [Environment]::GetFolderPath('Desktop')
 $wsh = New-Object -ComObject WScript.Shell
 
 foreach ($name in $Profile) {
-    if ($ReuseDefaultForWork -and $name -ieq 'Work') {
+    if ($ReuseDefaultFor -and $name -ieq $ReuseDefaultFor) {
         $dataDir = Join-Path $env:APPDATA 'Claude'
         Write-Host "  [$name] reuses existing login at $dataDir"
     } else {
@@ -174,7 +191,7 @@ foreach ($name in $Profile) {
         # the VM under the data dir but the VM service looks under %APPDATA% and dies
         # with "VHDX file not found", so the Cowork workspace never starts. Putting
         # the data dir under %APPDATA% makes both components agree (exactly how the
-        # -ReuseDefaultForWork "Work" profile already behaves).
+        # -ReuseDefaultFor profile already behaves).
         $dataDir = Join-Path $env:APPDATA $name
         New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
         Write-Host "  [$name] isolated profile at $dataDir"
