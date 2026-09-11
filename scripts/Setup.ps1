@@ -67,6 +67,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# Guard against a common invocation footgun: calling this script via an
+# external `powershell -File Setup.ps1 -Profile Work,Personal` (e.g. from
+# cmd.exe, Explorer's Run dialog, or a nested powershell.exe process) does
+# NOT split "Work,Personal" into an array the way typing the same line
+# directly into an interactive PowerShell session does -- the -File
+# tokenizer hands the whole thing through as one literal string. Left
+# unguarded, that silently creates a single, mis-named "Work,Personal"
+# profile shared by every shortcut instead of two isolated ones, which
+# defeats the entire point of this tool. Split any comma-containing entry
+# here so the script does the right thing regardless of how it's invoked.
+$Profile = $Profile | ForEach-Object { $_ -split ',' } | Where-Object { $_ }
+
 # Deprecated alias: -ReuseDefaultForWork means -ReuseDefaultFor Work, unless
 # -ReuseDefaultFor was already given explicitly (which wins).
 if ($ReuseDefaultForWork -and -not $ReuseDefaultFor) {
