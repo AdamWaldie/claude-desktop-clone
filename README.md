@@ -190,7 +190,7 @@ powershell -ExecutionPolicy Bypass -File scripts\Uninstall.ps1 -RemoveData
 | Icon is blank or grey | Re-run `Setup.ps1` (current versions extract the icon to a stable `bin\claude.ico`, so it survives updates). If a stale thumbnail lingers, clear the icon cache: `ie4uinit.exe -show`, or `Stop-Process -Name explorer -Force; Start-Process explorer`. |
 | **"Failed to start Claude's workspace" / `VHDX file not found`** in a cloned profile | The profile's data dir is **outside `%APPDATA%`**, so the Cowork VM service can't find `rootfs.vhdx`. Re-run `Setup.ps1` (current version puts profiles under `%APPDATA%`). To migrate an existing profile without re-login, move `ClaudeProfiles\<name>` → `%APPDATA%\<name>` and update the shortcut's first argument to `%APPDATA%\<name>`. Do **not** use a junction/symlink for `vm_bundles` — the VM service refuses to open reparse points. |
 | **Cowork won't start in one profile while another is open** (`HYPERVISOR_SERVICE_ERROR`, *"a virtual machine … with the specified identifier already exists"*) | Expected — see [Cowork VM limitations](#cowork-vm-limitations). Only one profile can run the Cowork VM at a time; quit the other profile (or reboot to clear a stale VM) before launching. |
-| **One profile's org network/domain restrictions apply to the other profile too** (e.g. a work org's outbound allow-list also blocks a personal account, even though sign-in is correctly separated) | Unconfirmed root cause — see [Cross-profile org restriction bleed](#cross-profile-org-restriction-bleed). Workaround: don't run both profiles signed in at the same time (fully quit one, including the system tray, before opening the other). |
+| **One profile's org network/domain restrictions apply to the other profile too** (e.g. a work org's outbound allow-list also blocks a personal account, even though sign-in is correctly separated) | Unconfirmed root cause, still open — see [Cross-profile org restriction bleed](#cross-profile-org-restriction-bleed) and run `scripts\Diagnose-ProfileBleed.ps1` to help pin down what's actually shared. |
 
 ---
 
@@ -256,30 +256,50 @@ a proxy-level org allow-list keyed by a header) — a test off the home network
 simultaneously was never actually completed, so this can't be told apart
 cleanly from the credential-store theory yet.
 
-**Current guidance until this is confirmed:** treat `--user-data-dir` +
-`-ConfigDir` isolation (see [Isolate Claude Code / Cowork memory per
-profile](#isolate-claude-code--cowork-memory-per-profile)) as isolating
-*login and chat/Cowork memory* only, not necessarily every org-level
-capability restriction. If one profile belongs to an org with network/data
-restrictions, don't assume those restrictions stay off the other profile
-while both are signed in on the same Windows account — as a precaution, fully
-quit one profile (check the system tray, not just the window) before opening
-the other, and never use the non-restricted profile for that org's data
-regardless of how isolation behaves.
+**Constraint: both profiles need to run side by side, at the same time, on
+one Windows account.** That rules out two workarounds that would otherwise be
+the obvious answer:
 
-`Launch-Claude.ps1` now enforces the "one profile at a time" precaution
-instead of relying on remembering it: before launching, it checks for a
-running `Claude.exe` using a *different* `--user-data-dir` and warns (with
-the option to launch anyway) rather than silently opening both. Pass `-Force`
-to skip the check for scripted/unattended launches.
+- *"Never have both signed in at once"* isn't acceptable — simultaneous use is
+  the actual use case, not an edge case to avoid.
+- *A separate Windows user account per org* would isolate Credential
+  Manager/DPAPI/device-trust state cleanly, but Windows only shows one user's
+  desktop at a time (Fast User Switching swaps the whole session, it doesn't
+  let two users' windows sit on screen together), so it can't give you side-by-
+  side either. Off the table for this use case regardless of setup cost.
 
-The real fix, if the credential-store theory holds, is a **separate Windows
-user account** per org — Credential Manager, DPAPI keys, and device-trust
-state are scoped per Windows user, so that closes the gap directly rather
-than working around it. Windows' Fast User Switching means this doesn't
-require signing out of the other account first, just switching users — worth
-weighing against the ongoing cost of the one-profile-at-a-time discipline
-above.
+So the only real fix is finding **where** the leaking state actually lives and
+scoping *that* per profile too — the same trick `-ConfigDir` already applies
+to Claude Code/Cowork memory, extended to whatever else isn't following
+`--user-data-dir`. `scripts/Diagnose-ProfileBleed.ps1` exists to find that:
+it lists every location a Windows app can plausibly cache state outside a
+Chromium `--user-data-dir` (`%LOCALAPPDATA%\Claude`, the MSIX package's
+protected `LocalState` folder, Windows Credential Manager entries, and
+relevant registry keys) and snapshots each one's contents.
+
+To use it: run once with only one profile signed in and working normally,
+run it again right after the *other* profile hits the cross-profile error,
+and diff the two reports. Whatever changed between the runs — a new
+Credential Manager entry, a new file under `LocalState`, a registry value —
+is the leak candidate. From there:
+
+- If it's a file or registry value inside something process-launchable (e.g.
+  `LocalState`), it may be possible to redirect it per profile the same way
+  `-ConfigDir` redirects `CLAUDE_CONFIG_DIR` — worth trying once the exact
+  path is known.
+- If it's genuinely Windows Credential Manager/DPAPI with no override, that's
+  an OS-level, per-user store with no per-process scoping mechanism — the
+  finding itself would need reporting as a product gap (Claude Desktop would
+  need to key that storage off `--user-data-dir`, e.g. via a scoped
+  credential target name, the way its own Chromium profile isolation already
+  does for cookies/local storage).
+
+```powershell
+.\scripts\Diagnose-ProfileBleed.ps1 -OutFile "$env:TEMP\claude-state-before.json"
+# ... reproduce the cross-profile block, then:
+.\scripts\Diagnose-ProfileBleed.ps1 -OutFile "$env:TEMP\claude-state-after.json"
+Compare-Object (Get-Content "$env:TEMP\claude-state-before.json") (Get-Content "$env:TEMP\claude-state-after.json")
+```
 
 ---
 
