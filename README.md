@@ -265,11 +265,21 @@ restrictions, don't assume those restrictions stay off the other profile
 while both are signed in on the same Windows account — as a precaution, fully
 quit one profile (check the system tray, not just the window) before opening
 the other, and never use the non-restricted profile for that org's data
-regardless of how isolation behaves. A real fix, if the credential-store
-theory holds, is a **separate Windows user account** per org — Credential
-Manager, DPAPI keys, and device-trust state are scoped per Windows user, so
-that closes the gap directly rather than working around it — at the cost of
-more setup.
+regardless of how isolation behaves.
+
+`Launch-Claude.ps1` now enforces the "one profile at a time" precaution
+instead of relying on remembering it: before launching, it checks for a
+running `Claude.exe` using a *different* `--user-data-dir` and warns (with
+the option to launch anyway) rather than silently opening both. Pass `-Force`
+to skip the check for scripted/unattended launches.
+
+The real fix, if the credential-store theory holds, is a **separate Windows
+user account** per org — Credential Manager, DPAPI keys, and device-trust
+state are scoped per Windows user, so that closes the gap directly rather
+than working around it. Windows' Fast User Switching means this doesn't
+require signing out of the other account first, just switching users — worth
+weighing against the ongoing cost of the one-profile-at-a-time discipline
+above.
 
 ---
 

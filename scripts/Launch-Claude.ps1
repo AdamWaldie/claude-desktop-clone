@@ -17,6 +17,10 @@
     a fresh, isolated login. Point it at "$env:APPDATA\Claude" to reuse the
     account that the normally-installed app is already signed into.
 
+.PARAMETER Force
+    Skip the "another profile is already running" warning below and launch
+    unconditionally. Use this for scripted/unattended launches.
+
 .EXAMPLE
     .\Launch-Claude.ps1 -ProfileDir "$env:USERPROFILE\ClaudeProfiles\personal"
 #>
@@ -27,7 +31,9 @@ param(
     # Optional: give this instance its own Claude Code / Cowork config + memory
     # store by pointing CLAUDE_CONFIG_DIR at a dedicated directory. Useful to
     # keep a personal profile's memory separate from a work one.
-    [string]$ConfigDir
+    [string]$ConfigDir,
+
+    [switch]$Force
 )
 
 function Show-Error {
@@ -60,6 +66,43 @@ if (-not $exe) {
 if (-not $exe -or -not (Test-Path $exe)) {
     Show-Error "Claude Desktop app was not found.`n`nInstall it from the Microsoft Store / claude.ai/download first, then run again."
     exit 1
+}
+
+# Warn if a DIFFERENT profile is already running. --user-data-dir isolates
+# login and (with -ConfigDir) Claude Code/Cowork memory, but not necessarily
+# every org-level network/capability restriction -- see README "Cross-profile
+# org restriction bleed" for a case where one org's outbound allow-list
+# appeared to affect a second, unrestricted profile while both were signed in
+# under the same Windows user. Until that's confirmed/fixed, the safest known
+# workaround is to never have two profiles running at once, so nudge for it
+# here instead of relying on remembering to check the system tray.
+if (-not $Force) {
+    try {
+        $others = Get-CimInstance Win32_Process -Filter "Name='Claude.exe'" -ErrorAction Stop |
+            Where-Object {
+                $_.CommandLine -and
+                $_.CommandLine -like '*--user-data-dir=*' -and
+                $_.CommandLine -notlike "*--user-data-dir=$ProfileDir*"
+            }
+    } catch {
+        $others = $null
+    }
+    if ($others) {
+        $otherDirs = ($others | ForEach-Object {
+            if ($_.CommandLine -match '--user-data-dir=("?)(.*?)\1(\s|$)') { $Matches[2] } else { '(unknown profile)' }
+        } | Select-Object -Unique) -join ', '
+        Add-Type -AssemblyName PresentationFramework
+        $choice = [System.Windows.MessageBox]::Show(
+            "Another Claude Desktop profile is already running:`n$otherDirs`n`n" +
+            "Running two profiles at the same time has been observed to leak one " +
+            "org's network/capability restrictions into the other, even though " +
+            "login stays isolated (see README: Cross-profile org restriction " +
+            "bleed). Recommended: fully quit the other profile first (check the " +
+            "system tray, not just the window), then launch this one.`n`n" +
+            "Launch anyway?",
+            'claude-desktop-clone', 'YesNo', 'Warning')
+        if ($choice -eq 'No') { exit 0 }
+    }
 }
 
 # Ensure the isolated data directory exists.
