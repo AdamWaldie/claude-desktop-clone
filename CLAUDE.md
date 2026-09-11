@@ -63,6 +63,7 @@ scripts/
   Setup.ps1           # installer: copies scripts to %USERPROFILE%\ClaudeProfiles\bin, extracts a stable bin\claude.ico, makes profiles + desktop shortcuts; -ConfigDir hashtable maps a profile to its own memory store
   Uninstall.ps1       # removes shortcuts (and optionally profile data)
   Build-Exe.ps1       # optional: wrap Launch-Claude.ps1 into an .exe via ps2exe
+  Diagnose-ProfileBleed.ps1  # read-only: snapshots state outside --user-data-dir (Credential Manager, MSIX LocalState, registry) to find cross-profile leaks
 ```
 
 ## Conventions

@@ -190,6 +190,7 @@ powershell -ExecutionPolicy Bypass -File scripts\Uninstall.ps1 -RemoveData
 | Icon is blank or grey | Re-run `Setup.ps1` (current versions extract the icon to a stable `bin\claude.ico`, so it survives updates). If a stale thumbnail lingers, clear the icon cache: `ie4uinit.exe -show`, or `Stop-Process -Name explorer -Force; Start-Process explorer`. |
 | **"Failed to start Claude's workspace" / `VHDX file not found`** in a cloned profile | The profile's data dir is **outside `%APPDATA%`**, so the Cowork VM service can't find `rootfs.vhdx`. Re-run `Setup.ps1` (current version puts profiles under `%APPDATA%`). To migrate an existing profile without re-login, move `ClaudeProfiles\<name>` → `%APPDATA%\<name>` and update the shortcut's first argument to `%APPDATA%\<name>`. Do **not** use a junction/symlink for `vm_bundles` — the VM service refuses to open reparse points. |
 | **Cowork won't start in one profile while another is open** (`HYPERVISOR_SERVICE_ERROR`, *"a virtual machine … with the specified identifier already exists"*) | Expected — see [Cowork VM limitations](#cowork-vm-limitations). Only one profile can run the Cowork VM at a time; quit the other profile (or reboot to clear a stale VM) before launching. |
+| **One profile's org network/domain restrictions apply to the other profile too** (e.g. a work org's outbound allow-list also blocks a personal account, even though sign-in is correctly separated) | Unconfirmed root cause, still open — see [Cross-profile org restriction bleed](#cross-profile-org-restriction-bleed) and run `scripts\Diagnose-ProfileBleed.ps1` to help pin down what's actually shared. |
 
 ---
 
@@ -213,6 +214,92 @@ window. Two consequences for multi-profile use:
    the VM-backed workspace only runs in one profile at a time — quit (or stop the
    workspace of) the other profile first. The plain chat / login isolation that
    this tool provides is unaffected.
+
+---
+
+## Cross-profile org restriction bleed
+
+**Status: investigated, not yet confirmed.** Reported once, on one machine, with a
+work org that enforces outbound network/domain allow-listing (client-data
+policy). Documented here so the investigation isn't lost and can be picked up
+or repeated.
+
+**Symptom:** with two profiles isolated via `--user-data-dir` (per
+[How it works](#how-it-works)) and each correctly signed into a different
+account — confirmed by the account shown in each window — *both* windows hit
+the same "blocked by allow list" network error that should only apply to the
+org-restricted account. Login/account isolation worked; some org-level
+network or capability restriction did not stay scoped to the profile that
+should have had it.
+
+**Ruled out:**
+- No VPN or network security agent (Zscaler/Netskope/Umbrella-style) running
+  on the machine — it's a personal, unmanaged machine, not the org's.
+- Not simply "both profiles share `%APPDATA%\Claude`" — the profiles were
+  genuinely separate data directories and showed separate accounts.
+
+**Leading theory (unconfirmed):** something scoped to the Windows user
+account rather than to the Chromium `--user-data-dir` — most plausibly
+Windows Credential Manager, a DPAPI-backed secret, or a device-trust/
+last-authenticated-identity marker that Electron's `safeStorage` (or a
+device-trust mechanism in Claude Desktop) keys off the OS user. If the
+org-restricted account's policy caches such a marker per-Windows-user, having
+that account signed in *anywhere* on the machine could apply its restriction
+to every profile under that same Windows user, regardless of data-dir
+isolation. This would explain why removing the org-restricted profile
+entirely (not just quitting it) resolved the other profile's error.
+
+**Not yet ruled out:** a network-path cause (e.g. Anthropic's
+[Tenant Restrictions](https://support.claude.com/en/articles/13198485-enforce-network-level-access-control-with-tenant-restrictions),
+a proxy-level org allow-list keyed by a header) — a test off the home network
+(e.g. a mobile hotspot) with both profiles rebuilt and signed in
+simultaneously was never actually completed, so this can't be told apart
+cleanly from the credential-store theory yet.
+
+**Constraint: both profiles need to run side by side, at the same time, on
+one Windows account.** That rules out two workarounds that would otherwise be
+the obvious answer:
+
+- *"Never have both signed in at once"* isn't acceptable — simultaneous use is
+  the actual use case, not an edge case to avoid.
+- *A separate Windows user account per org* would isolate Credential
+  Manager/DPAPI/device-trust state cleanly, but Windows only shows one user's
+  desktop at a time (Fast User Switching swaps the whole session, it doesn't
+  let two users' windows sit on screen together), so it can't give you side-by-
+  side either. Off the table for this use case regardless of setup cost.
+
+So the only real fix is finding **where** the leaking state actually lives and
+scoping *that* per profile too — the same trick `-ConfigDir` already applies
+to Claude Code/Cowork memory, extended to whatever else isn't following
+`--user-data-dir`. `scripts/Diagnose-ProfileBleed.ps1` exists to find that:
+it lists every location a Windows app can plausibly cache state outside a
+Chromium `--user-data-dir` (`%LOCALAPPDATA%\Claude`, the MSIX package's
+protected `LocalState` folder, Windows Credential Manager entries, and
+relevant registry keys) and snapshots each one's contents.
+
+To use it: run once with only one profile signed in and working normally,
+run it again right after the *other* profile hits the cross-profile error,
+and diff the two reports. Whatever changed between the runs — a new
+Credential Manager entry, a new file under `LocalState`, a registry value —
+is the leak candidate. From there:
+
+- If it's a file or registry value inside something process-launchable (e.g.
+  `LocalState`), it may be possible to redirect it per profile the same way
+  `-ConfigDir` redirects `CLAUDE_CONFIG_DIR` — worth trying once the exact
+  path is known.
+- If it's genuinely Windows Credential Manager/DPAPI with no override, that's
+  an OS-level, per-user store with no per-process scoping mechanism — the
+  finding itself would need reporting as a product gap (Claude Desktop would
+  need to key that storage off `--user-data-dir`, e.g. via a scoped
+  credential target name, the way its own Chromium profile isolation already
+  does for cookies/local storage).
+
+```powershell
+.\scripts\Diagnose-ProfileBleed.ps1 -OutFile "$env:TEMP\claude-state-before.json"
+# ... reproduce the cross-profile block, then:
+.\scripts\Diagnose-ProfileBleed.ps1 -OutFile "$env:TEMP\claude-state-after.json"
+Compare-Object (Get-Content "$env:TEMP\claude-state-before.json") (Get-Content "$env:TEMP\claude-state-after.json")
+```
 
 ---
 
