@@ -28,6 +28,21 @@
          fix (redirecting it per-profile, or reporting it as a product gap)
          can be scoped precisely instead of guessed at.
 
+    Also captured: each renderer process's --desktop-managed-config argument.
+    This is a JSON blob Claude Desktop itself builds fresh per launch
+    (forceLoginOrgUUIDs, loginSsoOrgDomain, deploymentMode, configOrgDelivered,
+    etc.) describing whether that instance is org-managed. Comparing this
+    field between two profiles WHILE BOTH ARE RUNNING AND THE ISSUE IS
+    ACTIVE is a more direct test than the file diff above:
+      - If the unrestricted profile's config correctly still shows
+        deploymentMode "1p" / null org fields even while it's hitting the
+        org's block, the leak isn't in this local launch config at all --
+        it's being applied server-side (e.g. per-request, keyed by a device
+        identifier rather than by which profile's session token is used).
+      - If the unrestricted profile's config has picked up the other org's
+        fields, that's the bleed, caught directly, and it's a bug in how the
+        app decides this value per launch rather than per Windows user.
+
     Locations checked:
       - %LOCALAPPDATA%\Claude (a machine/user-wide folder some Electron apps
         use in addition to --user-data-dir; distinct from any profile dir)
@@ -56,13 +71,14 @@ param(
 )
 
 $report = [ordered]@{
-    Timestamp        = (Get-Date).ToString('o')
-    RunningInstances = @()
-    LocalAppDataDir  = $null
-    AppxLocalState   = $null
-    AppxSettings     = $null
+    Timestamp         = (Get-Date).ToString('o')
+    RunningInstances  = @()
+    ManagedConfigByProfile = @()
+    LocalAppDataDir   = $null
+    AppxLocalState    = $null
+    AppxSettings      = $null
     CredentialManager = @()
-    RegistryKeys     = @()
+    RegistryKeys      = @()
 }
 
 # --- Which profiles are currently running -----------------------------------
@@ -72,6 +88,19 @@ try {
         $dir = if ($_.CommandLine -match '--user-data-dir=("?)(.*?)\1(\s|$)') { $Matches[2] } else { '(none / default)' }
         [ordered]@{ ProcessId = $_.ProcessId; UserDataDir = $dir; CommandLine = $_.CommandLine }
     }
+
+    # Each renderer's --desktop-managed-config is built fresh per launch and
+    # describes whether that instance is org-managed (forceLoginOrgUUIDs,
+    # loginSsoOrgDomain, deploymentMode, configOrgDelivered, ...). Pulling it
+    # out per profile lets you compare it directly across profiles instead of
+    # only diffing files on disk -- see the note in .DESCRIPTION above.
+    $report.ManagedConfigByProfile = $procs |
+        Where-Object { $_.CommandLine -match '--type=renderer' -and $_.CommandLine -match '--desktop-managed-config=' } |
+        ForEach-Object {
+            $dir = if ($_.CommandLine -match '--user-data-dir=("?)(.*?)\1(\s|$)') { $Matches[2] } else { '(none / default)' }
+            $cfg = if ($_.CommandLine -match '--desktop-managed-config="(.*?)"\s+--\S') { $Matches[1] -replace '\\"', '"' } else { $null }
+            [ordered]@{ ProcessId = $_.ProcessId; UserDataDir = $dir; ManagedConfig = $cfg }
+        }
 } catch { }
 
 # --- %LOCALAPPDATA%\Claude ----------------------------------------------------
@@ -136,3 +165,8 @@ foreach ($keyPath in @('HKCU:\Software\Claude', 'HKCU:\Software\Anthropic')) {
 $report | ConvertTo-Json -Depth 6 | Set-Content -Path $OutFile -Encoding UTF8
 Write-Host "Report written to $OutFile" -ForegroundColor Green
 Write-Host "Run again after reproducing the issue, then diff the two files." -ForegroundColor Cyan
+if ($report.ManagedConfigByProfile.Count -ge 2) {
+    Write-Host ""
+    Write-Host "Multiple profiles running -- compare ManagedConfigByProfile in the report directly:" -ForegroundColor Yellow
+    $report.ManagedConfigByProfile | Format-List | Out-String | Write-Host
+}
