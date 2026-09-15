@@ -10,7 +10,10 @@
       * copies the launcher scripts into -InstallDir\bin (so the shortcuts keep
         working even if you delete this repo),
       * creates a "Claude (<Name>)" shortcut on your Desktop that opens the app
-        with that profile, using the real Claude icon.
+        with that profile, using the real Claude icon,
+      * gives each profile its own Claude Code/Cowork memory + settings store
+        (CLAUDE_CONFIG_DIR) by default, isolated the same way the Chromium
+        login already is -- see -ConfigDir / -SharedConfig below.
 
     Whichever profile name you pass to -ReuseDefaultFor can reuse the account the
     normally-installed app is already signed into, so you don't have to log in
@@ -36,24 +39,42 @@
     is also passed explicitly, it takes precedence.
 
 .PARAMETER ConfigDir
-    Optional hashtable mapping a profile name to a Claude Code / Cowork config
-    directory (CLAUDE_CONFIG_DIR). Use this to give a profile its own isolated
-    memory + settings store, separate from any other account.
+    Optional hashtable overriding the Claude Code / Cowork config directory
+    (CLAUDE_CONFIG_DIR) for specific profiles. Every profile gets one by
+    default (see -SharedConfig to opt out entirely) -- pass this only to
+    point a particular profile's store somewhere other than the default
+    "$env:USERPROFILE\.claude-<profile name, lowercased>".
+
+.PARAMETER SharedConfig
+    Skip per-profile CLAUDE_CONFIG_DIR isolation and fall back to the old
+    default: every profile shares the same ~/.claude Claude Code/Cowork
+    memory and settings store. Use this if you specifically want that
+    shared behaviour; most setups don't.
 
 .EXAMPLE
     .\Setup.ps1
-    # Creates "Claude (Work)" and "Claude (Personal)" on the Desktop.
+    # Creates "Claude (Work)" and "Claude (Personal)" on the Desktop, each
+    # with its own isolated login AND its own Claude Code/Cowork memory.
 
 .EXAMPLE
     .\Setup.ps1 -Profile Work,Personal -ReuseDefaultFor Personal
+
+.EXAMPLE
+    # Works the same from cmd.exe too -- no arrays or hashtables needed on
+    # the command line, since -Profile and -ConfigDir both default sensibly:
+    # powershell -ExecutionPolicy Bypass -File scripts\Setup.ps1 -ReuseDefaultFor Personal
 
 .EXAMPLE
     # Deprecated alias, still supported:
     .\Setup.ps1 -Profile Personal,Side,Client -ReuseDefaultForWork
 
 .EXAMPLE
-    # Personal profile gets its own isolated Claude Code memory store:
-    .\Setup.ps1 -ConfigDir @{ Personal = "$env:USERPROFILE\.claude-personal" }
+    # Override just one profile's config store (others still get the default):
+    .\Setup.ps1 -ConfigDir @{ Personal = "$env:USERPROFILE\.claude-personal-old" }
+
+.EXAMPLE
+    # Opt back into the old shared ~/.claude behaviour for every profile:
+    .\Setup.ps1 -SharedConfig
 #>
 [CmdletBinding()]
 param(
@@ -61,7 +82,8 @@ param(
     [string]$InstallDir = (Join-Path $env:USERPROFILE 'ClaudeProfiles'),
     [string]$ReuseDefaultFor = $null,
     [switch]$ReuseDefaultForWork,
-    [hashtable]$ConfigDir = @{}
+    [hashtable]$ConfigDir = @{},
+    [switch]$SharedConfig
 )
 
 $ErrorActionPreference = 'Stop'
@@ -200,13 +222,24 @@ foreach ($name in $Profile) {
     $lnkPath = Join-Path $desktop "Claude ($name).lnk"
     $sc = $wsh.CreateShortcut($lnkPath)
     $sc.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
-    if ($ConfigDir.ContainsKey($name)) {
-        $cfg = $ConfigDir[$name]
+    if ($SharedConfig) {
+        # Opt-out path: every profile shares the default ~/.claude store.
+        $sc.Arguments = '"{0}" "{1}"' -f $vbs, $dataDir
+    } else {
+        # Default: give this profile its own Claude Code/Cowork memory +
+        # settings store, same as the Chromium login above. -ConfigDir can
+        # override the auto-derived path for a specific profile; every other
+        # profile still gets one, it's just computed rather than typed out --
+        # this also means the common case needs no hashtable literal on the
+        # command line, so it works the same from cmd.exe as from PowerShell.
+        $cfg = if ($ConfigDir.ContainsKey($name)) {
+            $ConfigDir[$name]
+        } else {
+            Join-Path $env:USERPROFILE ".claude-$($name.ToLowerInvariant())"
+        }
         New-Item -ItemType Directory -Force -Path $cfg | Out-Null
         $sc.Arguments = '"{0}" "{1}" "{2}"' -f $vbs, $dataDir, $cfg
         Write-Host "      memory/config dir: $cfg"
-    } else {
-        $sc.Arguments = '"{0}" "{1}"' -f $vbs, $dataDir
     }
     $sc.IconLocation = $iconLocation
     $sc.Description = "Claude Desktop - $name profile"

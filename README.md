@@ -62,8 +62,15 @@ cd claude-desktop-clone
 
 # Create "Claude (Work)" + "Claude (Personal)" shortcuts on your Desktop.
 # -ReuseDefaultFor <name> keeps your already-signed-in account for that profile.
-powershell -ExecutionPolicy Bypass -File scripts\Setup.ps1 -Profile Work,Personal -ReuseDefaultFor Personal
+powershell -ExecutionPolicy Bypass -File scripts\Setup.ps1 -ReuseDefaultFor Personal
 ```
+
+That's the whole command — `-Profile` isn't needed since `Work,Personal` is
+already the default, and every profile gets its own isolated Claude
+Code/Cowork memory store automatically too (see below). It works exactly the
+same from **cmd.exe** as from PowerShell, since nothing on the command line
+needs PowerShell-only syntax (arrays, hashtables) — see
+[Isolate Claude Code / Cowork memory per profile](#isolate-claude-code--cowork-memory-per-profile).
 
 Then:
 
@@ -71,7 +78,8 @@ Then:
 2. Double-click **Claude (Work)** → a fresh window; sign in to the other
    account.
 
-Both windows now run at the same time, fully isolated.
+Both windows now run at the same time, fully isolated — separate login *and*
+separate Claude Code/Cowork memory.
 
 ### Custom profiles
 
@@ -79,6 +87,14 @@ Both windows now run at the same time, fully isolated.
 # Any names you like; each gets its own isolated login + shortcut.
 powershell -ExecutionPolicy Bypass -File scripts\Setup.ps1 -Profile Personal,ClientA,ClientB
 ```
+
+Note: `-Profile` with more than one name needs a real PowerShell array, so
+call this one from an actual PowerShell prompt (`.\scripts\Setup.ps1 -Profile
+Personal,ClientA,ClientB`), not `powershell -File` from cmd.exe or a nested
+process — that form doesn't split the comma-separated value and will
+silently create one mis-named profile shared by all three instead of three
+separate ones. If you only need the `Work,Personal` default, the Quick start
+command above sidesteps this entirely since it doesn't pass `-Profile` at all.
 
 ### Different install location
 
@@ -88,20 +104,28 @@ powershell -ExecutionPolicy Bypass -File scripts\Setup.ps1 -InstallDir "D:\Claud
 
 ### Isolate Claude Code / Cowork memory per profile
 
-By default, instances only isolate the **login** (Chromium `--user-data-dir`).
-The embedded **Claude Code / Cowork** still uses the shared `~/.claude` config
-(memory, settings). To give a profile its *own* memory store too, point its
-`CLAUDE_CONFIG_DIR` at a dedicated directory via `-ConfigDir`:
+**This is on by default.** Login (Chromium `--user-data-dir`) and the
+embedded **Claude Code / Cowork** memory/settings store (`CLAUDE_CONFIG_DIR`)
+are both isolated per profile without passing anything extra — `Setup.ps1`
+auto-derives `~/.claude-<profile name, lowercased>` for each one (e.g.
+`~/.claude-personal`, `~/.claude-work`).
+
+To point a specific profile's store somewhere else, override just that entry
+with `-ConfigDir` (a real hashtable, so call the script directly rather than
+via `powershell -File`):
 
 ```powershell
-# NOTE: a real hashtable -> call the script directly (not via -File):
-& .\scripts\Setup.ps1 -ConfigDir @{ Personal = "$env:USERPROFILE\.claude-personal" }
+& .\scripts\Setup.ps1 -ConfigDir @{ Personal = "$env:USERPROFILE\.claude-personal-old" }
 ```
 
-Now the **Personal** instance's Claude Code memory lives in
-`~/.claude-personal\projects\<dir>\memory\`, fully separate from the work
-account — and it's the same store the `claude-personal` CLI uses (if you set one
-up). Manual equivalent for any launcher:
+To go back to the old shared behaviour instead — every profile using the same
+`~/.claude` store — pass `-SharedConfig`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\Setup.ps1 -SharedConfig
+```
+
+Manual equivalent for any launcher:
 
 ```text
 wscript.exe launch.vbs "<profile-data-dir>" "<claude-config-dir>"
