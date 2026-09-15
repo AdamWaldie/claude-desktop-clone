@@ -38,21 +38,26 @@ its own login.
    `Icon.Save()`: saving an icon built from an `HICON` drops the colour plane and
    writes only the 1-bit mask, producing a grey icon.
 
-## Optional second isolation layer (`CLAUDE_CONFIG_DIR`)
+## Second isolation layer (`CLAUDE_CONFIG_DIR`) — on by default
 
-`--user-data-dir` isolates the **Claude Desktop login** only. The embedded
-**Claude Code / Cowork** still reads the shared `~/.claude` store (memory,
-settings) regardless of which profile launched it. To isolate that too, a
-profile can point `CLAUDE_CONFIG_DIR` at a dedicated directory:
+`--user-data-dir` isolates the **Claude Desktop login**. The embedded
+**Claude Code / Cowork** would otherwise still read a shared `~/.claude`
+store (memory, settings) regardless of which profile launched it, so
+`Setup.ps1` isolates that too, by default, for every profile:
 
 - `Launch-Claude.ps1 -ConfigDir <path>` sets `$env:CLAUDE_CONFIG_DIR` before
   `Start-Process`. The child app (and any `claude-code` it spawns) inherits it.
 - `launch.vbs` forwards an optional **2nd argument** as that config dir.
-- `Setup.ps1 -ConfigDir @{ Personal = '<path>' }` (a hashtable) wires a profile's
-  shortcut to pass the 3rd `wscript` argument.
+- `Setup.ps1` auto-derives `~/.claude-<profile name, lowercased>` for each
+  profile unless overridden. `-ConfigDir @{ Personal = '<path>' }` (a
+  hashtable) overrides the auto-derived path for specific profiles only —
+  every other profile still gets its own default. `-SharedConfig` opts a
+  whole run back into the old shared-`~/.claude` behaviour.
 
-This is **additive and optional** — omitting it keeps the shared `~/.claude`
-store, which is the default. Don't make it mandatory or hard-code a path.
+Keep the auto-derived path **computed, not hard-coded** (it's a function of
+`$env:USERPROFILE` and the profile name, not a literal path), and keep
+`-ConfigDir`/`-SharedConfig` working as full overrides — don't make the
+default the *only* option.
 
 ## Layout
 
