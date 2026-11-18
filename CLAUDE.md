@@ -27,7 +27,12 @@ its own login.
 
 3. **Launch directly via the exe**, not via MSIX shell activation. MSIX
    activation (`shell:AppsFolder\...!Claude`) does not reliably forward the
-   `--user-data-dir` argument; launching the exe path does.
+   `--user-data-dir` argument; launching the exe path does. **Exception:** the
+   `-ReuseDefaultFor` profile (`launch.vbs "--default"` → `Launch-Claude.ps1
+   -Default`) deliberately uses activation with no arguments, because it must be
+   the real Start-menu instance. Its data now lives in
+   `%LOCALAPPDATA%\Claude-Data\claude_<hash>`, not `%APPDATA%\Claude`, so never
+   point a `--user-data-dir` at `%APPDATA%\Claude` to "reuse" the default.
 
 4. **Icons must point at a stable path, never the versioned exe.** `Setup.ps1`
    extracts the Claude icon once into `bin\claude.ico` and sets every shortcut's
@@ -37,6 +42,33 @@ its own login.
    a `Bitmap` → write a 32-bit **PNG-based `.ico`** by hand. Do **not** use
    `Icon.Save()`: saving an icon built from an `HICON` drops the colour plane and
    writes only the 1-bit mask, producing a grey icon.
+
+## Updates reach cloned profiles
+
+Claude's updater relaunches only the default instance. A cloned profile that is
+open during an update keeps running the old package build, and re-clicking its
+shortcut only focuses that old process (singleton lock). Two safeguards exist —
+keep both:
+
+- `Launch-Claude.ps1` finds this profile's running browser process (a
+  `WindowsApps\...\Claude.exe` without `--type=`, matching `--user-data-dir`)
+  and, if its `ExecutablePath` is not under the current `InstallLocation`,
+  offers to restart it (`-Restart` skips the prompt, `-NoUpdateCheck` skips the
+  check).
+- `Setup.ps1` writes `bin\profiles.json` and registers the per-user scheduled
+  task `claude-desktop-clone update watcher` → `watch.vbs` →
+  `Watch-ClaudeUpdates.ps1`. It restarts an idle stale profile silently (idle =
+  no `claude-code(-vm)\` descendant process) and prompts once per new version
+  for a busy one (declines in `bin\update-state.json`). `-NoUpdateWatcher` /
+  `-NoAutoRestart` opt out. It never touches the default instance (no
+  `--user-data-dir`).
+- Self-sync: `Setup.ps1` writes `bin\install.json` (source dir, explicitly
+  passed options, Setup hash). The watcher re-runs Setup with those options
+  when the repo is on `-TrackBranch` (read from `.git\HEAD`, no git.exe) and
+  its scripts differ from `bin\`.
+
+Staleness is "running exe path ≠ current package folder", never a hard-coded
+version.
 
 ## Second isolation layer (`CLAUDE_CONFIG_DIR`) — on by default
 
@@ -68,6 +100,8 @@ scripts/
   Setup.ps1           # installer: copies scripts to %USERPROFILE%\ClaudeProfiles\bin, extracts a stable bin\claude.ico, makes profiles + desktop shortcuts; -ConfigDir hashtable maps a profile to its own memory store
   Uninstall.ps1       # removes shortcuts (and optionally profile data)
   Build-Exe.ps1       # optional: wrap Launch-Claude.ps1 into an .exe via ps2exe
+  Watch-ClaudeUpdates.ps1  # offers to restart profiles still running an old build after an update (reads bin\profiles.json)
+  watch.vbs           # runs Watch-ClaudeUpdates.ps1 hidden; target of the per-user scheduled task Setup.ps1 registers
   Diagnose-ProfileBleed.ps1  # read-only: snapshots state outside --user-data-dir (Credential Manager, MSIX LocalState, registry) to find cross-profile leaks
 ```
 

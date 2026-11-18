@@ -140,6 +140,9 @@ wscript.exe launch.vbs "<profile-data-dir>" "<claude-config-dir>"
 └── bin\
     ├── Launch-Claude.ps1     # resolves the MSIX exe, launches with --user-data-dir
     ├── launch.vbs            # runs the .ps1 hidden (no console flash)
+    ├── Watch-ClaudeUpdates.ps1  # offers to restart profiles left on an old build
+    ├── watch.vbs             # runs the watcher hidden (scheduled task target)
+    ├── profiles.json         # profile -> data dir + config dir, read by the watcher
     └── claude.ico            # icon extracted to a STABLE path (survives updates)
 
 %APPDATA%\                     # profile DATA lives here (required for Cowork VM)
@@ -163,17 +166,40 @@ repo afterwards and everything keeps working. Profile *data* lives under
 - **Re-clicking a shortcut** focuses that profile's existing window instead of
   opening a duplicate — exactly the normal single-instance behaviour, but scoped
   per profile.
-- **App updates** are handled automatically: the launcher re-resolves the exe
-  path each time via `Get-AppxPackage`.
+- **App updates.** The launcher re-resolves the exe path each time via
+  `Get-AppxPackage`, so a *fresh* launch always uses the installed version. But
+  Claude's own updater only relaunches the **default** instance: a cloned
+  profile that is open during an update keeps running the old build, and
+  re-clicking its shortcut would only focus that old process. Two safeguards
+  cover this:
+  - **Re-clicking a stale profile's shortcut** asks whether to restart it on the
+    new version (it's closed and relaunched with the same data dir and
+    `CLAUDE_CONFIG_DIR`).
+  - **Update watcher.** `Setup.ps1` registers a per-user scheduled task
+    (`claude-desktop-clone update watcher`, no admin) that runs
+    `Watch-ClaudeUpdates.ps1` hidden at logon and every 10 minutes. If a profile
+    is still running an older build, it restarts it silently when idle (no
+    Claude Code / Cowork sessions open), or asks first, once per new version,
+    when it's busy (`-NoAutoRestart` makes it always ask). Change the interval
+    with `-WatchIntervalMinutes`, or skip the task with `-NoUpdateWatcher`.
+  - **Self-sync of this tool.** Setup records the repo path and its options in
+    `bin\install.json`. When the repo has `master` checked out (`-TrackBranch`)
+    and its scripts change, the watcher re-runs Setup with the same options,
+    so pulling a change is enough (`-NoAutoSync` turns this off). Nothing syncs
+    while a feature branch is checked out. Check by hand with
+    `powershell -File "$env:USERPROFILE\ClaudeProfiles\bin\Watch-ClaudeUpdates.ps1" -Quiet`.
 - **Shortcut icons survive updates.** `Setup.ps1` extracts the Claude icon once
   to `bin\claude.ico` (a stable path) and points every shortcut there. Pointing a
   shortcut straight at the versioned `WindowsApps\Claude_<version>\...\Claude.exe`
   would go blank after the next update deletes that folder — which is why the
   icon is copied out to a fixed location instead.
-- **Switching the "main" app:** the regular Start-menu Claude icon still uses
-  `%APPDATA%\Claude`, i.e. the same login as whichever profile was created with
-  `-ReuseDefaultFor` (or the deprecated `-ReuseDefaultForWork` alias, which
-  reuses it for a profile named "Work").
+- **The `-ReuseDefaultFor` profile is the Start-menu app.** Its shortcut runs
+  `launch.vbs "--default"`, which opens Claude via MSIX activation exactly like
+  the Start menu: same login, same data, same `~/.claude` memory, updated by
+  Claude's own updater. (Older setups pointed it at
+  `--user-data-dir=%APPDATA%\Claude`. Claude has since moved the default data to
+  `%LOCALAPPDATA%\Claude-Data\claude_<hash>`, so that opened an empty,
+  signed-out profile. Re-run Setup to fix it.)
 
 ---
 
@@ -210,6 +236,7 @@ powershell -ExecutionPolicy Bypass -File scripts\Uninstall.ps1 -RemoveData
 |---|---|
 | "Claude Desktop app not found" | Install it from [claude.ai/download](https://claude.ai/download) and run `Setup.ps1` again. |
 | Shortcut does nothing | Run `scripts\Launch-Claude.ps1 -ProfileDir <dir>` directly in PowerShell to see the error. |
+| **A cloned profile shows an older Claude version than the main app** | It was open when Claude updated, so it's still running the old build. Re-click its shortcut and choose **Yes** to restart it, or fully quit it (tray → Quit) and relaunch. Re-run `Setup.ps1` to install the update watcher, which offers this automatically. |
 | Second window won't open | Make sure the two shortcuts use **different** `--user-data-dir` paths (check shortcut *Target*). |
 | Icon is blank or grey | Re-run `Setup.ps1` (current versions extract the icon to a stable `bin\claude.ico`, so it survives updates). If a stale thumbnail lingers, clear the icon cache: `ie4uinit.exe -show`, or `Stop-Process -Name explorer -Force; Start-Process explorer`. |
 | **"Failed to start Claude's workspace" / `VHDX file not found`** in a cloned profile | The profile's data dir is **outside `%APPDATA%`**, so the Cowork VM service can't find `rootfs.vhdx`. Re-run `Setup.ps1` (current version puts profiles under `%APPDATA%`). To migrate an existing profile without re-login, move `ClaudeProfiles\<name>` → `%APPDATA%\<name>` and update the shortcut's first argument to `%APPDATA%\<name>`. Do **not** use a junction/symlink for `vm_bundles` — the VM service refuses to open reparse points. |
