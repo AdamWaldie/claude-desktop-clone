@@ -44,4 +44,28 @@ foreach ($name in $Profile) {
     }
 }
 
+# Drop removed profiles from the update watcher's manifest; once none are left,
+# remove the watcher's scheduled task too.
+$binDir = Join-Path $InstallDir 'bin'
+$manifestPath = Join-Path $binDir 'profiles.json'
+$remaining = @()
+if (Test-Path $manifestPath) {
+    try {
+        $remaining = @((Get-Content $manifestPath -Raw | ConvertFrom-Json).profiles |
+            Where-Object { $Profile -notcontains $_.name })
+    } catch { $remaining = @() }
+    if ($remaining.Count) {
+        @{ profiles = $remaining } | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding UTF8
+    } else {
+        Remove-Item $manifestPath, (Join-Path $binDir 'update-state.json'), (Join-Path $binDir 'install.json') -Force -ErrorAction SilentlyContinue
+    }
+}
+if (-not $remaining.Count) {
+    $taskName = 'claude-desktop-clone update watcher'
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Write-Host "Removed scheduled task: $taskName" -ForegroundColor Yellow
+    }
+}
+
 Write-Host "Done."
